@@ -26,32 +26,26 @@ export class TransformService {
 
   /**
    * 步骤 1：手写草稿 → 干净印章图
-   * 核心约束：保留用户手画的结构（字形/布局/分割线），只做：
-   *   - 黑色 → 朱砂红
-   *   - 去除格子纸、米格、涂改痕迹
-   *   - 背景纯白、笔画干净无杂色
+   * @param type  'baiwen' 白文（阴文·红底白字，需要反色）| 'zhuwen' 朱文（阳文·白底红字，不反色）
+   * 共同点：保留用户手画的结构（字形/布局/分割线），去除格子纸、米格、涂改痕迹
    */
-  async step1(draftBuffer: Buffer, originalName: string): Promise<{
+  async step1(
+    draftBuffer: Buffer,
+    originalName: string,
+    type: 'baiwen' | 'zhuwen' = 'baiwen',
+  ): Promise<{
     step1Url: string;
     step1Key: string;
   }> {
-    this.logger.log(`step1: received draft buffer (${draftBuffer.length} bytes, name=${originalName})`);
+    this.logger.log(`step1[${type}]: received draft buffer (${draftBuffer.length} bytes, name=${originalName})`);
 
     // 1) 上传草稿到对象存储，拿到可访问 URL（AI 图生图需要公网 URL）
     const { url: draftUrl } = await this.storage.uploadImage(draftBuffer, originalName);
-    this.logger.log(`step1: draft uploaded, url=${draftUrl}`);
+    this.logger.log(`step1[${type}]: draft uploaded, url=${draftUrl}`);
 
     // 2) 调 AI 图生图
-    // 关键：传统阳刻印章 = 红底白字（字是阳文保留的留白，红是被刻掉区域填充的印泥）
-    //     原稿黑色笔画 → 印章的"白字留白"；原稿白色底 → 印章的"朱砂红底"
-    // 颜色：用西泠印社"朱标"印泥的暗朱红色（深沉、饱和、偏暗红），不要用大红色
-    const prompt = [
-      '把图中这张手写印章设计稿重新绘制为一个干净的中国传统阳刻印章效果图。',
-      '【颜色逻辑 - 最重要】采用【红底白字】结构：',
-      '  - 原稿中黑色笔画对应的区域 = 印章的【白字留白】（阳刻保留的字形，呈现白色/米白色）；',
-      '  - 原稿中白色背景对应的区域 = 印章的【朱砂红印泥底】；',
-      '  - 字是白色，背景是红色，与原稿颜色正好相反（原稿黑字 → 白字；原稿白底 → 红底）。',
-      '【印章外框】整体加上一个印章的方形外框（红色描边），框线粗细均匀。',
+    // 朱砂红印泥色号（共用于白文和朱文）：西泠印社"朱标"印泥的暗朱红
+    const cinnabarColorBlock = [
       '【朱砂红色号 - 关键】必须使用【西泠印社"朱标"印泥】的色调，这是中国传统老印泥的【暗朱砂红 / 枣红 / 酒红】，是经年使用后自然氧化沉淀的深沉红，【绝对不能使用大红色或鲜红色】。',
       '  - 这种红色的视觉感受：像陈年朱砂印泥、像老印章盖在宣纸上的红、像暗红/枣红/酒红，【不刺眼、不鲜亮、不饱和过度】；',
       '  - 参考色值（按优先级）：hex #A93226 / #922B21 / #8B2A1F / #B83A2A / #C0392B / #993322 / #8B1A1A；',
@@ -60,14 +54,43 @@ export class TransformService {
       '  - 【绝对禁止使用】：大红色 #FF0000 / #FF1A1A / 任何 R>200 且 G<20 的红色；',
       '  - 【绝对禁止使用】：粉红/橙红/橘红/玫红/正红；',
       '  - 关键判断：你的 R 值不能超过 200，理想范围 130-180。G 和 B 都必须在 20-60 之间。',
+    ].join(' ');
+
+    // 通用清理要求
+    const commonBlock = [
       '【结构保真】严格保留原稿的字形结构、笔画粗细、布局、方格分割与文字内容，不要修改或美化字形。',
       '【清理】彻底去除原稿中的格子纸、米字格、辅助线、涂改痕迹、墨点、污渍。',
-      '【笔画内部】白字（留白）内部必须绝对干净，不能有任何红/灰/黑色斑点、阴影、墨渍。',
-      '【整体】整个画面只有【朱砂红（印泥色）+ 白色（字形留白）】两种颜色，不能有第三种杂色。',
+      '【笔画内部】印章中的字形笔画区域（无论白文留白还是朱文红字）内部必须绝对干净，不能有任何斑点、阴影、墨渍。',
+      '【整体】整个画面只有【朱砂红（印泥色）+ 白色/米白】两种颜色，不能有第三种杂色。',
       '【边缘】印章边缘相对整齐，仅有极轻微的手工钤印感。',
     ].join(' ');
 
-    this.logger.log(`step1: generating seal image from ${draftUrl}`);
+    // 白文（阴文·红底白字）：需要反色，原稿黑→白字，原稿白→红底
+    const baiwenBlock = [
+      '【颜色逻辑 - 最重要】采用【红底白字】结构（白文 / 阴文 / 阳刻）：',
+      '  - 原稿中黑色笔画对应的区域 = 印章的【白字留白】（阳刻保留的字形，呈现白色/米白色）；',
+      '  - 原稿中白色背景对应的区域 = 印章的【朱砂红印泥底】；',
+      '  - 字是白色，背景是红色，与原稿颜色正好相反（原稿黑字 → 白字；原稿白底 → 红底）。',
+      '【印章外框】整体加上一个印章的方形外框（红色描边），框线粗细均匀。',
+    ].join(' ');
+
+    // 朱文（阳文·白底红字）：不反色，原稿黑→红字，原稿白→白底
+    const zhuwenBlock = [
+      '【颜色逻辑 - 最重要】采用【白底红字】结构（朱文 / 阳文 / 阴刻）：',
+      '  - 原稿中黑色笔画对应的区域 = 印章的【朱砂红字】（阳刻保留的字形沾印泥，呈现朱砂红）；',
+      '  - 原稿中白色背景对应的区域 = 印章的【白色/米白底】；',
+      '  - 字是红色，背景是白色，【与原稿颜色逻辑一致】（原稿黑字 → 红字；原稿白底 → 白底）。',
+      '【印章外框】整体加上一个印章的方形外框（红色描边），框线粗细均匀。',
+    ].join(' ');
+
+    const prompt = [
+      `把图中这张手写印章设计稿重新绘制为一个干净的中国传统${type === 'zhuwen' ? '阳刻（朱文）' : '阴刻（白文）'}印章效果图。`,
+      type === 'zhuwen' ? zhuwenBlock : baiwenBlock,
+      cinnabarColorBlock,
+      commonBlock,
+    ].join(' ');
+
+    this.logger.log(`step1[${type}]: generating seal image from ${draftUrl}`);
 
     const response = await this.client.generate({
       prompt,

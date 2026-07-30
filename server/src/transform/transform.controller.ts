@@ -24,6 +24,7 @@ export class TransformController {
   @UseInterceptors(FileInterceptor('file'))
   async step1(
     @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: { type?: string } = {},
   ): Promise<{ code: number; msg: string; data: { step1Url: string; step1Key: string } }> {
     if (!file) {
       throw new BadRequestException('未收到文件，请用 field "file" 上传图片');
@@ -33,7 +34,10 @@ export class TransformController {
     if (!buffer) {
       throw new BadRequestException('无法读取上传的文件内容');
     }
-    const result = await this.transformService.step1(buffer, file.originalname || 'draft.png');
+    // 印章类型：baiwen 白文（阴文·红底白字·反色）| zhuwen 朱文（阳文·白底红字·不反色）
+    const rawType = (body?.type || 'baiwen').toLowerCase();
+    const type: 'baiwen' | 'zhuwen' = rawType === 'zhuwen' ? 'zhuwen' : 'baiwen';
+    const result = await this.transformService.step1(buffer, file.originalname || 'draft.png', type);
     return {
       code: 200,
       msg: 'success',
