@@ -1,0 +1,8 @@
+packages:
+  - 'server'
+
+overrides:
+  esbuild: 0.25.12
+
+patchedDependencies:
+  '@tarojs/plugin-mini-ci@4.1.9': patches/@tarojs__plugin-mini-ci@4.1.9.patch

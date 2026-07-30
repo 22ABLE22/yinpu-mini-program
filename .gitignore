@@ -46,3 +46,5 @@ pnpm-debug.log*
 
 # CodeGraph index
 .codegraph
+node-compile-cache/
+.codegraph/

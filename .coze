@@ -1,0 +1,19 @@
+[project]
+entrypoint = "server.js"
+requires = [ "nodejs-24" ]
+project_type = "miniprogram"
+template = "taro"
+version = "0.0.32"
+appliedPatches = [ ]
+
+[dev]
+build = [ "bash", ".cozeproj/scripts/dev_build.sh" ]
+run = [ "bash", ".cozeproj/scripts/dev_run.sh" ]
+deps = [ "git" ]
+pack = [ "bash", ".cozeproj/scripts/pack.sh" ]
+validate = [ "bash", ".cozeproj/scripts/validate.sh" ]
+
+[deploy]
+build = [ "bash", ".cozeproj/scripts/deploy_build.sh" ]
+run = [ "bash", ".cozeproj/scripts/deploy_run.sh" ]
+deps = [ "git" ]
