@@ -4,6 +4,7 @@ import { memoryStorage } from 'multer';
 import { TransformController } from './transform.controller';
 import { TransformService } from './transform.service';
 import { StorageService } from './storage.service';
+import { ColorProcessor } from './color.processor';
 
 /**
  * 印章转换模块
@@ -19,7 +20,7 @@ import { StorageService } from './storage.service';
     }),
   ],
   controllers: [TransformController],
-  providers: [TransformService, StorageService],
+  providers: [TransformService, StorageService, ColorProcessor],
   exports: [StorageService],
 })
 export class TransformModule {}
