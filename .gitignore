@@ -37,14 +37,21 @@ pnpm-debug.log*
 .DS_Store
 
 # Key
-# key/
+key/
+server/uploads/
+.env.local
 
 # Preview files
 .preview
 
-.cozeproj/reduction
+.cozeproj/
+project.private.config.json
 
 # CodeGraph index
 .codegraph
 node-compile-cache/
 .codegraph/
+
+# Local ComfyUI portable (do not commit models/binaries)
+ComfyUI_windows_portable/
+

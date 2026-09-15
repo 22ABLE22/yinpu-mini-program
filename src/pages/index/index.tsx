@@ -86,11 +86,11 @@ function useSealFlow(type: SealType) {
       setStep1Url(step1Data.data.step1Url);
       setStage('sealing');
 
-      // Step 2：印章 → 宣纸
+      // Step 2：印章 → 宣纸（朱文后端走色偏短路，必须带上 type）
       const step2Res = await Network.request({
         url: '/api/transform/step2',
         method: 'POST',
-        data: { imageUrl: step1Data.data.step1Url },
+        data: { imageUrl: step1Data.data.step1Url, type },
       });
       const step2Data = step2Res.data;
       console.log(`[${type} step2]`, step2Data);
@@ -115,7 +115,7 @@ function useSealFlow(type: SealType) {
       const step2Res = await Network.request({
         url: '/api/transform/step2',
         method: 'POST',
-        data: { imageUrl: step1Url },
+        data: { imageUrl: step1Url, type },
       });
       const step2Data = step2Res.data;
       if (step2Data?.code !== 200) {

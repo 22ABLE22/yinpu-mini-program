@@ -1,58 +1,65 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { S3Storage } from 'coze-coding-dev-sdk';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import * as fs from 'fs';
+import * as fsp from 'fs/promises';
+import * as path from 'path';
+import { randomBytes } from 'crypto';
 
 /**
- * 对象存储服务：上传图片并返回签名 URL
- * 用于：把用户上传的草稿、AI 生成的中间图/最终图都保存到对象存储，
- *      然后生成可访问的 URL（供 AI 图生图使用 + 前端展示）。
+ * 本地磁盘存储（脱离扣子 S3）。
+ * - 文件写到 UPLOAD_DIR（默认 server/uploads）
+ * - 返回 PUBLIC_BASE_URL + /uploads/xxx
+ * - main.ts 会把 /uploads 静态映射到该目录
  */
 @Injectable()
 export class StorageService {
   private readonly logger = new Logger(StorageService.name);
-  private readonly storage: S3Storage;
+  private readonly uploadDir: string;
+  private readonly publicBase: string;
 
   constructor() {
-    this.storage = new S3Storage({
-      endpointUrl: process.env.COZE_BUCKET_ENDPOINT_URL,
-      accessKey: '',
-      secretKey: '',
-      bucketName: process.env.COZE_BUCKET_NAME,
-      region: 'cn-beijing',
-    });
+    this.uploadDir = path.resolve(
+      process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'),
+    );
+    fs.mkdirSync(this.uploadDir, { recursive: true });
+
+    const port = process.env.PORT || '3000';
+    this.publicBase = (
+      process.env.PUBLIC_BASE_URL || `http://localhost:${port}`
+    ).replace(/\/$/, '');
   }
 
-  /**
-   * 上传 buffer 到对象存储，返回签名 URL（有效期 1 天）
-   */
+  getUploadDir(): string {
+    return this.uploadDir;
+  }
+
+  /** 写入 buffer，返回 { key, url } */
   async uploadBuffer(
     buffer: Buffer,
     filename: string,
     contentType: string,
-    expireTime = 86400,
   ): Promise<{ key: string; url: string }> {
-    const key = await this.storage.uploadFile({
-      fileContent: buffer,
-      fileName: filename,
-      contentType,
-    });
-    const url = await this.storage.generatePresignedUrl({
-      key,
-      expireTime,
-    });
-    this.logger.log(`uploaded ${key} (${buffer.length} bytes)`);
-    return { key, url };
+    const safeName = this.sanitizeName(filename);
+    const abs = path.join(this.uploadDir, safeName);
+    await fsp.writeFile(abs, buffer);
+    this.logger.log(`saved ${safeName} (${buffer.length} bytes) → ${abs}`);
+    return {
+      key: safeName,
+      url: `${this.publicBase}/uploads/${safeName}`,
+    };
   }
 
-  /**
-   * 从 Buffer 读出内容并按文件名/类型上传
-   */
+  /** 按扩展名推断 content-type 后上传图片 */
   async uploadImage(
     buffer: Buffer,
     originalName: string,
   ): Promise<{ key: string; url: string }> {
-    const ext = originalName.split('.').pop()?.toLowerCase() || 'png';
+    const ext = (originalName.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
     const contentType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';
-    const safeName = `yinpu/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    return this.uploadBuffer(buffer, safeName, contentType);
+    const name = `${Date.now()}_${randomBytes(3).toString('hex')}.${ext === 'jpg' ? 'jpg' : ext === 'jpeg' ? 'jpeg' : 'png'}`;
+    return this.uploadBuffer(buffer, name, contentType);
+  }
+
+  private sanitizeName(name: string): string {
+    return name.replace(/[\\/:\*\?"<>\|]/g, '_').slice(-80);
   }
 }

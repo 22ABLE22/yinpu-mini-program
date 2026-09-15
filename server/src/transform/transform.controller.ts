@@ -19,6 +19,40 @@ import { TransformService } from './transform.service';
 export class TransformController {
   constructor(private readonly transformService: TransformService) {}
 
+  /**
+   * step2 会服务端拉取 imageUrl，仅允许本机/项目存储域名，避免 SSRF。
+   * 白名单：localhost、127.0.0.1，以及 PUBLIC_BASE_URL / COZE_BUCKET_ENDPOINT_URL 的主机名。
+   */
+  private isAllowedImageUrl(imageUrl: string): boolean {
+    let parsed: URL;
+    try {
+      parsed = new URL(imageUrl);
+    } catch {
+      return false;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+
+    const host = parsed.hostname.toLowerCase();
+    const allowHosts = new Set<string>(['localhost', '127.0.0.1']);
+
+    const endpoints = [
+      process.env.PUBLIC_BASE_URL,
+      process.env.COZE_BUCKET_ENDPOINT_URL,
+    ].filter(Boolean) as string[];
+
+    for (const ep of endpoints) {
+      try {
+        allowHosts.add(new URL(ep).hostname.toLowerCase());
+      } catch {
+        // 忽略非法 endpoint
+      }
+    }
+
+    return allowHosts.has(host);
+  }
+
   @Post('step1')
   @HttpCode(200)
   @UseInterceptors(FileInterceptor('file'))
@@ -48,13 +82,18 @@ export class TransformController {
   @Post('step2')
   @HttpCode(200)
   async step2(
-    @Body() body: { imageUrl?: string },
+    @Body() body: { imageUrl?: string; type?: string },
   ): Promise<{ code: number; msg: string; data: { step2Url: string; step2Key: string } }> {
     const imageUrl = body?.imageUrl;
     if (!imageUrl || typeof imageUrl !== 'string') {
       throw new BadRequestException('imageUrl 不能为空');
     }
-    const result = await this.transformService.step2(imageUrl);
+    if (!this.isAllowedImageUrl(imageUrl)) {
+      throw new BadRequestException('imageUrl 域名不合法');
+    }
+    const rawType = (body?.type || 'baiwen').toLowerCase();
+    const type: 'baiwen' | 'zhuwen' = rawType === 'zhuwen' ? 'zhuwen' : 'baiwen';
+    const result = await this.transformService.step2(imageUrl, type);
     return {
       code: 200,
       msg: 'success',

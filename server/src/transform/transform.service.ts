@@ -1,186 +1,159 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
-import { ImageGenerationClient, Config } from 'coze-coding-dev-sdk';
+import { Inject, Injectable, Logger, BadRequestException } from '@nestjs/common';
 import axios from 'axios';
 import { StorageService } from './storage.service';
 import { ColorProcessor } from './color.processor';
+import { IMAGE_GENERATOR, ImageGenerator } from './image-generator';
 
 /**
  * 印章转换服务
- * 提供两步 AI 图生图：
  *  - step1：手写草稿 → 干净朱砂红印章
  *  - step2：印章图 → 宣纸钤印效果
  *
- * 两步完成后都做一次颜色后处理，把 AI 倾向的"鲜红"统一调成"西泠印社朱标印泥"的暗朱红。
+ * 生图通过注入的 ImageGenerator（ComfyUI / Mock），颜色后处理仍在本服务用 sharp 完成。
  */
 @Injectable()
 export class TransformService {
   private readonly logger = new Logger(TransformService.name);
-  private readonly client: ImageGenerationClient;
 
   constructor(
     private readonly storage: StorageService,
     private readonly colorProcessor: ColorProcessor,
-  ) {
-    this.client = new ImageGenerationClient(new Config());
-  }
+    @Inject(IMAGE_GENERATOR) private readonly generator: ImageGenerator,
+  ) {}
 
-  /**
-   * 步骤 1：手写草稿 → 干净印章图
-   * @param type  'baiwen' 白文（阴文·红底白字，需要反色）| 'zhuwen' 朱文（阳文·白底红字，不反色）
-   * 共同点：保留用户手画的结构（字形/布局/分割线），去除格子纸、米格、涂改痕迹
-   */
   async step1(
     draftBuffer: Buffer,
     originalName: string,
     type: 'baiwen' | 'zhuwen' = 'baiwen',
-  ): Promise<{
-    step1Url: string;
-    step1Key: string;
-  }> {
-    this.logger.log(`step1[${type}]: received draft buffer (${draftBuffer.length} bytes, name=${originalName})`);
+  ): Promise<{ step1Url: string; step1Key: string }> {
+    this.logger.log(
+      `step1[${type}]: received draft buffer (${draftBuffer.length} bytes, name=${originalName})`,
+    );
 
-    // 1) 上传草稿到对象存储，拿到可访问 URL（AI 图生图需要公网 URL）
-    const { url: draftUrl } = await this.storage.uploadImage(draftBuffer, originalName);
-    this.logger.log(`step1[${type}]: draft uploaded, url=${draftUrl}`);
+    // 预处理：去掉红色格子线，只留墨迹线稿，避免 ControlNet 锁死格子纸
+    const lineArt = await this.colorProcessor.toControlNetLineArt(draftBuffer);
+    const { url: draftUrl } = await this.storage.uploadImage(lineArt, 'draft_lineart.png');
+    this.logger.log(`step1[${type}]: lineart uploaded, url=${draftUrl}`);
 
-    // 2) 调 AI 图生图
-    // 朱砂红印泥色号（共用于白文和朱文）：西泠印社"朱标"印泥的暗朱红
-    const cinnabarColorBlock = [
-      '【朱砂红色号 - 关键】必须使用【西泠印社"朱标"印泥】的色调，这是中国传统老印泥的【暗朱砂红 / 枣红 / 酒红】，是经年使用后自然氧化沉淀的深沉红，【绝对不能使用大红色或鲜红色】。',
-      '  - 这种红色的视觉感受：像陈年朱砂印泥、像老印章盖在宣纸上的红、像暗红/枣红/酒红，【不刺眼、不鲜亮、不饱和过度】；',
-      '  - 参考色值（按优先级）：hex #A93226 / #922B21 / #8B2A1F / #B83A2A / #C0392B / #993322 / #8B1A1A；',
-      '  - RGB 范围：R 在 130-180 之间，G 在 25-60 之间，B 在 25-55 之间，R 与 G/B 差值 80-150（差值越大越暗沉）；',
-      '  - 【绝对禁止使用】：鲜红 #E2211A / #FF0000 / #DC143C / #FF4444 / #FF3030 / #E60000 这一类；',
-      '  - 【绝对禁止使用】：大红色 #FF0000 / #FF1A1A / 任何 R>200 且 G<20 的红色；',
-      '  - 【绝对禁止使用】：粉红/橙红/橘红/玫红/正红；',
-      '  - 关键判断：你的 R 值不能超过 200，理想范围 130-180。G 和 B 都必须在 20-60 之间。',
-    ].join(' ');
-
-    // 通用清理要求
-    const commonBlock = [
-      '【结构保真】严格保留原稿的字形结构、笔画粗细、布局、方格分割与文字内容，不要修改或美化字形。',
-      '【清理】彻底去除原稿中的格子纸、米字格、辅助线、涂改痕迹、墨点、污渍。',
-      '【笔画内部】印章中的字形笔画区域（无论白文留白还是朱文红字）内部必须绝对干净，不能有任何斑点、阴影、墨渍。',
-      '【整体】整个画面只有【朱砂红（印泥色）+ 白色/米白】两种颜色，不能有第三种杂色。',
-      '【边缘】印章边缘相对整齐，仅有极轻微的手工钤印感。',
-    ].join(' ');
-
-    // 白文（阴文·红底白字）：需要反色，原稿黑→白字，原稿白→红底
-    const baiwenBlock = [
-      '【颜色逻辑 - 最重要】采用【红底白字】结构（白文 / 阴文 / 阳刻）：',
-      '  - 原稿中黑色笔画对应的区域 = 印章的【白字留白】（阳刻保留的字形，呈现白色/米白色）；',
-      '  - 原稿中白色背景对应的区域 = 印章的【朱砂红印泥底】；',
-      '  - 字是白色，背景是红色，与原稿颜色正好相反（原稿黑字 → 白字；原稿白底 → 红底）。',
-      '【印章外框】整体加上一个印章的方形外框（红色描边），框线粗细均匀。',
-    ].join(' ');
-
-    // 朱文（阳文·白底红字）：不反色，原稿黑→红字，原稿白→白底
-    const zhuwenBlock = [
-      '【颜色逻辑 - 最重要】采用【白底红字】结构（朱文 / 阳文 / 阴刻）：',
-      '  - 原稿中黑色笔画对应的区域 = 印章的【朱砂红字】（阳刻保留的字形沾印泥，呈现朱砂红）；',
-      '  - 原稿中白色背景对应的区域 = 印章的【白色/米白底】；',
-      '  - 字是红色，背景是白色，【与原稿颜色逻辑一致】（原稿黑字 → 红字；原稿白底 → 白底）。',
-      '【印章外框】整体加上一个印章的方形外框（红色描边），框线粗细均匀。',
-    ].join(' ');
-
-    const prompt = [
-      `把图中这张手写印章设计稿重新绘制为一个干净的中国传统${type === 'zhuwen' ? '阳刻（朱文）' : '阴刻（白文）'}印章效果图。`,
-      type === 'zhuwen' ? zhuwenBlock : baiwenBlock,
-      cinnabarColorBlock,
-      commonBlock,
-    ].join(' ');
-
-    this.logger.log(`step1[${type}]: generating seal image from ${draftUrl}`);
-
-    const response = await this.client.generate({
+    const prompt = this.buildStep1Prompt(type);
+    // 风格转换要够强：denoise 偏高，结构交给 ControlNet
+    const generated = await this.generator.generate({
       prompt,
-      image: draftUrl,
-      size: '2K',
-      watermark: false,
+      imageUrl: draftUrl,
+      width: 512,
+      height: 512,
+      denoise: type === 'zhuwen' ? 0.68 : 0.72,
     });
 
-    const helper = this.client.getResponseHelper(response);
-    if (!helper.success || helper.imageUrls.length === 0) {
-      throw new BadRequestException(`step1 生成失败：${helper.errorMessages.join('; ')}`);
+    const aiBuffer = await this.fetchBuffer(generated.url);
+    const useMock = (process.env.IMAGE_GENERATOR || '').toLowerCase() === 'mock';
+    let processedBuffer: Buffer;
+    if (useMock) {
+      processedBuffer = await this.colorProcessor.adjustRedToDarkCinnabar(aiBuffer);
+    } else if (type === 'zhuwen') {
+      processedBuffer = await this.colorProcessor.adjustToZhuwenSeal(aiBuffer);
+    } else {
+      processedBuffer = await this.colorProcessor.adjustToBaiwenSeal(aiBuffer);
     }
 
-    // 3) 下载 AI 生成的图，重新上传到我们自己的存储（避免外部 URL 过期）
-    const aiImageUrl = helper.imageUrls[0];
-    const aiImageRes = await axios.get<ArrayBuffer>(aiImageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 60000,
-    });
-    const aiBuffer = Buffer.from(aiImageRes.data);
-
-    // 4) 颜色后处理：把 AI 倾向的"鲜红"统一调成"西泠印社朱标印泥"的暗朱红
-    const processedBuffer = await this.colorProcessor.adjustRedToDarkCinnabar(aiBuffer);
-
     const { key, url } = await this.storage.uploadImage(processedBuffer, 'step1_seal.png');
-
     this.logger.log(`step1: done, key=${key}`);
-
     return { step1Url: url, step1Key: key };
   }
 
-  /**
-   * 步骤 2：印章图 → 宣纸钤印效果
-   * 输入：步骤 1 生成的印章图 URL
-   * 输出：朱砂红印章 + 米白宣纸纹理的最终图
-   */
-  async step2(step1Url: string): Promise<{
-    step2Url: string;
-    step2Key: string;
-  }> {
-    // 关键：保持印章本体的【红底白字】结构，只换背景
-    // 颜色：用西泠印社"朱标"印泥的暗朱红色（深沉、饱和、偏暗红），不要用大红色
-    const prompt = [
-      '将图中这枚印章转换为传统中国宣纸钤印效果。',
-      '【印章本体保持】印章的【红底白字】结构、字形、布局、方格分割、白色字形留白必须完全保持原样，绝不能把红白关系反转，也不能改字。',
-      '【背景替换】把印章周围的大面积背景替换为传统中国米白色宣纸的质感：',
-      '  - 颜色：米白色（off-white），类似 hex #FBF7F0 / #F5EFE0；',
-      '  - 可见淡淡的手工宣纸纤维纹理、纸张颗粒感；',
-      '  - 背景中可以保留非常浅淡的宣纸暗影、轻微的纸张不均匀感，模拟真实宣纸。',
-      '【朱砂红色号 - 关键】印章的红色必须是【西泠印社"朱标"印泥】的【暗朱砂红 / 枣红 / 酒红】，是经年使用后自然氧化沉淀的深沉红，【绝对不能使用大红色或鲜红色】。',
-      '  - 这种红色的视觉感受：像陈年朱砂印泥、像老印章盖在宣纸上的红、像暗红/枣红/酒红，【不刺眼、不鲜亮、不饱和过度】；',
-      '  - 参考色值（按优先级）：hex #A93226 / #922B21 / #8B2A1F / #B83A2A / #C0392B / #993322 / #8B1A1A；',
-      '  - RGB 范围：R 在 130-180 之间，G 在 25-60 之间，B 在 25-55 之间，R 与 G/B 差值 80-150（差值越大越暗沉）；',
-      '  - 【绝对禁止使用】：鲜红 #E2211A / #FF0000 / #DC143C / #FF4444 / #FF3030 / #E60000 这一类；',
-      '  - 【绝对禁止使用】：大红色 #FF0000 / #FF1A1A / 任何 R>200 且 G<20 的红色；',
-      '  - 【绝对禁止使用】：粉红/橙红/橘红/玫红/正红；',
-      '  - 关键判断：你的 R 值不能超过 200，理想范围 130-180。G 和 B 都必须在 20-60 之间。',
-      '【边缘】印章边缘相对整齐，仅有极轻微的手工钤印感。',
-      '【字形内部】白字（留白）内部必须保持纯白/纯米白底色，绝对干净，不能有任何红色斑点、灰色、黑色、深色的斑点、污痕、脏点、墨渍或阴影。',
-      '【整体】整个画面只有【朱砂红（印泥色）+ 米白宣纸】两种颜色，不能出现第三种杂色。',
-    ].join(' ');
-
-    this.logger.log(`step2: generating rice paper effect from ${step1Url}`);
-
-    const response = await this.client.generate({
-      prompt,
-      image: step1Url,
-      size: '2K',
-      watermark: false,
-    });
-
-    const helper = this.client.getResponseHelper(response);
-    if (!helper.success || helper.imageUrls.length === 0) {
-      throw new BadRequestException(`step2 生成失败：${helper.errorMessages.join('; ')}`);
+  async step2(
+    step1Url: string,
+    type: 'baiwen' | 'zhuwen' = 'baiwen',
+  ): Promise<{ step2Url: string; step2Key: string }> {
+    // 朱文：不走 AI，只把白底调成米白宣纸色
+    if (type === 'zhuwen') {
+      this.logger.log(`step2[zhuwen]: reuse step1 image, shift white to rice paper`);
+      const originalBuffer = await this.fetchBuffer(step1Url);
+      const processedBuffer = await this.colorProcessor.shiftWhiteToRicePaper(originalBuffer);
+      const { key, url } = await this.storage.uploadImage(processedBuffer, 'step2_paper.png');
+      return { step2Url: url, step2Key: key };
     }
 
-    const aiImageUrl = helper.imageUrls[0];
-    const aiImageRes = await axios.get<ArrayBuffer>(aiImageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 60000,
+    // 白文 step2：
+    // step1 已是「红底白字」成品，这里只负责「放到宣纸上 + 去掉外层多余细红圈」，
+    // 绝不能再跑 adjustToBaiwenSeal（会把红/白反相）。
+    const prompt = this.buildStep2BaiwenPrompt();
+    const generated = await this.generator.generate({
+      prompt,
+      imageUrl: step1Url,
+      width: 512,
+      height: 512,
+      // 结构优先，只让模型改纸面/外圈，避免把印文改花
+      denoise: 0.48,
+      cnStrength: 0.55,
     });
-    const aiBuffer = Buffer.from(aiImageRes.data);
 
-    // 颜色后处理：再次确认整图（包括 AI 引入的红色杂点）都调成暗朱红
+    const aiBuffer = await this.fetchBuffer(generated.url);
+    // 仅把红色收成暗朱砂，不改变红/白关系，不做反相
     const processedBuffer = await this.colorProcessor.adjustRedToDarkCinnabar(aiBuffer);
-
     const { key, url } = await this.storage.uploadImage(processedBuffer, 'step2_paper.png');
-
-    this.logger.log(`step2: done, key=${key}`);
-
+    this.logger.log(`step2[baiwen]: paper+cleanup done, key=${key}`);
     return { step2Url: url, step2Key: key };
+  }
+
+  private async fetchBuffer(url: string): Promise<Buffer> {
+    try {
+      const res = await axios.get<ArrayBuffer>(url, {
+        responseType: 'arraybuffer',
+        timeout: 60_000,
+      });
+      return Buffer.from(res.data);
+    } catch (err: any) {
+      throw new BadRequestException(`下载图片失败: ${err?.message || err}`);
+    }
+  }
+
+  private buildStep1Prompt(type: 'baiwen' | 'zhuwen'): string {
+    const base = [
+      'flat vector style traditional Chinese carved seal',
+      'ONLY two colors: dark cinnabar red and off-white',
+      'square seal with thick border',
+      'seal script (zhuan shu) character strokes',
+      'solid color fill, no gradient, no paper texture, no grid lines',
+      'no shadow, no 3d, no photo, no watermark, no English text',
+      'centered composition, high contrast',
+    ];
+    if (type === 'zhuwen') {
+      base.push(
+        'yang carving zhuwen intaglio: white background, red characters and red border',
+      );
+    } else {
+      base.push(
+        'yin carving baiwen relief: solid red background, white character strokes carved out',
+      );
+    }
+    return base.join(', ');
+  }
+
+  /**
+   * 白文 step2 提示词
+   * 输入已是「红底白字」印章；输出应是「同一枚印 + 宣纸底」，且去掉外层多余细红圈。
+   * 不要让模型改成白底红字。
+   */
+  private buildStep2BaiwenPrompt(): string {
+    return [
+      'Keep this exact Chinese baiwen seal: solid dark cinnabar red background, white carved character strokes, white seal border.',
+      'Do NOT invert colors. Do NOT make white background with red characters.',
+      'Replace the surrounding area with traditional Chinese xuan rice paper: off-white handmade paper, subtle fiber grain.',
+      'Keep only ONE square seal border that tightly wraps the characters.',
+      'Remove any extra outer thin red ring, second outline, or decorative red frame outside the main seal.',
+      'Outside the seal square: only clean rice paper, no red ink, no second border, no shadow, no grid.',
+      'Flat illustration, centered seal, high quality.',
+    ].join(' ');
+  }
+
+  private buildStep2Prompt(): string {
+    return [
+      'traditional Chinese xuan rice paper, off-white handmade paper with subtle fiber',
+      'place this square seal stamp on the paper',
+      'keep seal colors: dark cinnabar red and white strokes',
+      'flat illustration, no grid lines, no photo, no extra objects',
+      'soft even lighting, clean background',
+    ].join(', ');
   }
 }

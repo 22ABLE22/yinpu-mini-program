@@ -11,6 +11,15 @@ import prodConfig from './prod';
 import pkg from '../package.json';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+
+if (!process.env.PROJECT_DOMAIN) {
+  console.warn(
+    '[config] PROJECT_DOMAIN is empty. Create <project>/.env.local with:\nPROJECT_DOMAIN=http://localhost:3000\nThen restart pnpm dev:weapp',
+  );
+} else {
+  console.log(`[config] PROJECT_DOMAIN=${process.env.PROJECT_DOMAIN}`);
+}
 
 const generateTTProjectConfig = (outputRoot: string) => {
   const config = {
@@ -147,6 +156,22 @@ export default defineConfig<'vite'>(async (merge, _env) => {
                 rem2rpx: true,
                 cssEntries: [path.resolve(__dirname, '../src/app.css')],
               }),
+              // 微信/抖音小程序 WXSS 不支持 :has()，构建后剔除含 :has() 的规则
+              {
+                name: 'strip-css-has-selectors',
+                generateBundle(_options: unknown, bundle: Record<string, any>) {
+                  for (const file of Object.values(bundle)) {
+                    if (file?.type !== 'asset') continue;
+                    const name: string = file.fileName || '';
+                    if (!/\.(wxss|css)$/i.test(name)) continue;
+                    let css = String(file.source ?? '');
+                    if (!css.includes(':has(')) continue;
+                    // 整段删除含 :has() 的选择器规则
+                    css = css.replace(/[^{}]*:has\([^)]*\)[^{]*\{[^}]*\}/g, '');
+                    file.source = css;
+                  }
+                },
+              },
             ]),
         ...(process.env.TARO_ENV === 'tt'
           ? [
