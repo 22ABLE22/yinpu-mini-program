@@ -44,23 +44,154 @@
 
 ## 快速开始
 
+### 路径说明（本机参考）
+
+| 用途 | 路径 |
+|------|------|
+| 项目根目录 | `E:\Users\Admin\github\Proofreading-preview` |
+| ComfyUI | `E:\Users\Admin\github\ComfyUI_windows_portable` |
+| 环境变量 | 项目根 `.env.local`、`server\.env.local` |
+
+下面所有命令都在**项目根目录**执行（先把终端 `cd` 过去）。
+
+---
+
+## 重启电脑后如何继续（日常开发）
+
+电脑重启后，**三项服务不会自动启动**，必须按顺序手动拉起来。
+
+### 第 0 步：打开项目
+
+```powershell
+cd E:\Users\Admin\github\Proofreading-preview
+```
+
+### 第 1 步：启动 ComfyUI（生图）
+
+另开一个 PowerShell：
+
+```powershell
+cd E:\Users\Admin\github\ComfyUI_windows_portable
+.\python_embeded\python.exe -s ComfyUI\main.py --windows-standalone-build
+```
+
+（也可双击目录里对应的 `run_*.bat` / 启动脚本。）
+
+**是否成功：** 浏览器打开 `http://127.0.0.1:8188` 能看到 ComfyUI 界面。
+
+> 8G 显存若不稳，可加：`--lowvram`。
+
+### 第 2 步：启动后端 Nest（API）
+
+**新开**一个 PowerShell：
+
+```powershell
+cd E:\Users\Admin\github\Proofreading-preview
+pnpm --filter server dev
+```
+
+**是否成功：** 终端出现类似：
+
+```text
+Server running on http://localhost:3000
+Static uploads: http://localhost:3000/uploads/ → ...
+```
+
+自测：
+
+```powershell
+curl.exe http://localhost:3000/api/health
+```
+
+应返回 JSON（如 `{"status":"success",...}`）。
+
+> 若端口占用：先结束占用 3000 的进程，或改 `server/.env.local` 里的 `PORT`。
+
+### 第 3 步：启动小程序构建（watch）
+
+**再新开**一个 PowerShell：
+
+```powershell
+cd E:\Users\Admin\github\Proofreading-preview
+pnpm dev:weapp
+```
+
+**是否成功：** 出现类似 `built in xxxxms`，且日志里有：
+
+```text
+[config] PROJECT_DOMAIN=http://localhost:3000
+```
+
+若显示 `PROJECT_DOMAIN is empty`，检查项目根 `.env.local` 后**完全停掉再重启** `pnpm dev:weapp`。
+
+### 第 4 步：微信开发者工具
+
+1. 打开微信开发者工具  
+2. 导入项目目录：`E:\Users\Admin\github\Proofreading-preview`  
+3. AppID：你的小程序 AppID（如 `wx5cc481107b22f822`）  
+4. **详情 → 本地设置 → 勾选「不校验合法域名、web-view、TLS 版本以及 HTTPS 证书」**  
+5. 点「编译」→ 选图 → 朱文/白文 → 保存  
+
+### 第 5 步：真机预览（可选）
+
+1. 开发者工具「预览」扫码  
+2. 手机微信：右上角 **… → 开发调试 → 打开调试**  
+3. 项目根与 `server/.env.local` 中域名需为**电脑局域网 IP**（不能是 `localhost`）：
+
+```env
+# 查看本机 IP
+ipconfig
+# 例如以太网是 192.168.1.112，则：
+PROJECT_DOMAIN=http://192.168.1.112:3000
+PUBLIC_BASE_URL=http://192.168.1.112:3000
+```
+
+4. 改完域名后：**重启 Nest** + **重启 `pnpm dev:weapp`**，再预览  
+5. 手机与电脑同一 Wi-Fi；防火墙放行 TCP 3000  
+
+手机浏览器可先测：`http://192.168.1.112:3000/api/health`。
+
+---
+
+### 重启后检查清单（打印用）
+
+| 顺序 | 事项 | 验证 |
+|------|------|------|
+| 1 | ComfyUI 已启动 | 打开 `http://127.0.0.1:8188` |
+| 2 | Nest 已启动 | `curl.exe http://localhost:3000/api/health` 有 JSON |
+| 3 | weapp watch 已启动 | 编译成功，日志含 `PROJECT_DOMAIN=` |
+| 4 | 开发者工具已打开本项目 | 勾选不校验域名 |
+| 5 | （真机）域名=局域网 IP | 手机能访问 `/api/health` |
+
+三个终端（ComfyUI / Nest / weapp）建议保持不要关。
+
+---
+
+## 首次安装（换电脑或删了依赖时）
+
 ### 1. 安装依赖
 
 ```powershell
+cd E:\Users\Admin\github\Proofreading-preview
 pnpm install
 ```
 
 ### 2. 配置环境变量
 
-**项目根目录** `.env.local`（注入小程序请求域名）：
+复制并按需修改：
+
+- 项目根：`.env.local`（必须有 `PROJECT_DOMAIN`）  
+- 服务端：`server/.env.local`（参考 `server/.env.example`）  
+
+电脑开发默认：
 
 ```env
+# 项目根 .env.local
 PROJECT_DOMAIN=http://localhost:3000
 ```
 
-**`server/.env.local`**（可参考 `server/.env.example`）：
-
 ```env
+# server/.env.local
 PORT=3000
 PUBLIC_BASE_URL=http://localhost:3000
 UPLOAD_DIR=./uploads
@@ -73,38 +204,43 @@ COMFYUI_CN_STRENGTH=0.72
 COMFYUI_TIMEOUT_MS=600000
 ```
 
-调试链路可用 `IMAGE_GENERATOR=mock`（透传原图，不调 ComfyUI）。
+仅测链路、不调生图：`IMAGE_GENERATOR=mock`。
 
-### 3. 启动 ComfyUI
+### 3. 确认 ComfyUI 模型文件存在
 
-- 主模型：`models/checkpoints/v1-5-pruned-emaonly.safetensors`  
-- ControlNet：`models/controlnet/control_v11p_sd15_canny.pth`  
-- 启动后确认 `http://127.0.0.1:8188` 可访问  
+| 文件 | 目录 |
+|------|------|
+| `v1-5-pruned-emaonly.safetensors` | `ComfyUI...\models\checkpoints\` |
+| `control_v11p_sd15_canny.pth` | `ComfyUI...\models\controlnet\` |
 
-### 4. 启动服务与小程序
-
-```powershell
-# 终端 1：后端
-pnpm --filter server dev
-
-# 终端 2：小程序 watch
-pnpm dev:weapp
-```
-
-微信开发者工具导入本仓库根目录：
-
-- AppID：使用你的小程序 AppID  
-- 本地设置勾选「不校验合法域名…」  
-- 编译后选图 → 朱文/白文 → 保存  
+### 4. 按上文「重启电脑后如何继续」启动三个服务
 
 ### 常用脚本
 
 ```powershell
-pnpm dev:server      # 后端
-pnpm dev:weapp       # 微信小程序
-pnpm build:weapp     # 构建到 dist/
-pnpm preview:weapp   # 预览二维码
-pnpm validate        # lint + tsc
+pnpm --filter server dev   # 后端
+pnpm dev:weapp             # 微信小程序 watch
+pnpm build:weapp           # 构建到 dist/
+pnpm preview:weapp         # 预览二维码
+pnpm validate              # lint + tsc
+```
+
+### Git 推送（版本管理）
+
+```powershell
+cd E:\Users\Admin\github\Proofreading-preview
+git status
+git add -A
+git commit -m "描述本次修改"
+# 使用你自己的凭证推送，勿把 PAT 写进仓库文件
+git push origin main
+```
+
+首次配置作者：
+
+```powershell
+git config user.name "你的GitHub用户名"
+git config user.email "你的GitHub noreply邮箱"
 ```
 
 ## API
