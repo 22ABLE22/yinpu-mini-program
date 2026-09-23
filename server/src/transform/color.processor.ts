@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { INK } from './seal.constants';
+import { paperNoise, clamp255, lumaOf, isReddish } from './image-math';
 // sharp 是 CJS 模块，使用 require 避免 ESM 互操作问题
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sharp = require('sharp');
@@ -96,18 +98,12 @@ export class ColorProcessor {
     const channels = info.channels;
     const w = info.width;
     const h = info.height;
-    const redR = 169;
-    const redG = 50;
-    const redB = 38;
-    const paperR = 251;
-    const paperG = 247;
-    const paperB = 240;
-
-    const isReddish = (r: number, g: number, b: number) =>
-      r > g + 30 && r > b + 30 && r > 70;
-    const lumaOf = (r: number, g: number, b: number) =>
-      0.299 * r + 0.587 * g + 0.114 * b;
-    const clamp255 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+    const redR = INK.cinnabar.r;
+    const redG = INK.cinnabar.g;
+    const redB = INK.cinnabar.b;
+    const paperR = INK.paper.r;
+    const paperG = INK.paper.g;
+    const paperB = INK.paper.b;
 
     // 忽略最外圈 3%
     const borderX = Math.floor(w * 0.03);
@@ -174,14 +170,6 @@ export class ColorProcessor {
       maxX = Math.min(w - 1, maxX + padX);
       maxY = Math.min(h - 1, maxY + padY);
     }
-
-    const paperNoise = (x: number, y: number) => {
-      const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-      const frac = n - Math.floor(n);
-      const n2 = Math.sin(x * 3.1 + y * 7.7) * 12345.678;
-      const frac2 = n2 - Math.floor(n2);
-      return (frac - 0.5) * 7 + (frac2 - 0.5) * 4;
-    };
 
     let toWhite = 0;
     let toRed = 0;
@@ -332,16 +320,10 @@ export class ColorProcessor {
     const channels = info.channels;
     const w = info.width;
     const h = info.height;
-    const targetRed = [0xa9, 0x32, 0x26];
-    const paperR = 251;
-    const paperG = 247;
-    const paperB = 240;
-
-    const isReddish = (r: number, g: number, b: number) =>
-      r > g + 30 && r > b + 30 && r > 70;
-    const lumaOf = (r: number, g: number, b: number) =>
-      0.299 * r + 0.587 * g + 0.114 * b;
-    const clamp255 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+    const targetRed = [INK.cinnabar.r, INK.cinnabar.g, INK.cinnabar.b];
+    const paperR = INK.paper.r;
+    const paperG = INK.paper.g;
+    const paperB = INK.paper.b;
 
     const borderX = Math.floor(w * 0.03);
     const borderY = Math.floor(h * 0.03);
@@ -404,14 +386,6 @@ export class ColorProcessor {
       maxX = Math.min(w - 1, maxX + padX);
       maxY = Math.min(h - 1, maxY + padY);
     }
-
-    const paperNoise = (x: number, y: number) => {
-      const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-      const frac = n - Math.floor(n);
-      const n2 = Math.sin(x * 3.1 + y * 7.7) * 12345.678;
-      const frac2 = n2 - Math.floor(n2);
-      return (frac - 0.5) * 7 + (frac2 - 0.5) * 4;
-    };
 
     let redKept = 0;
     let toPaper = 0;

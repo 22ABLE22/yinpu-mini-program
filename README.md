@@ -4,6 +4,36 @@
 
 前端 Taro 4 + React，后端 NestJS，本机 ComfyUI（SD1.5 + ControlNet）图生图，sharp 做颜色收敛。已不依赖扣子平台。
 
+## 架构（一图看懂）
+
+```
+微信小程序 pages/index
+    │  PROJECT_DOMAIN → uploadFile / request
+    ▼
+NestJS  /api/transform/step1|step2
+    ├── toControlNetLineArt     去红格、留墨迹
+    ├── ImageGenerator          comfy | mock
+    │     └── ComfyUI 8188      SD1.5 + Canny
+    ├── ColorProcessor          朱文/白文色收敛、纸纹
+    └── StorageService          server/uploads → /uploads
+```
+
+服务端职责拆分：
+
+| 模块 | 职责 |
+|------|------|
+| `transform.controller.ts` | HTTP 入参、imageUrl 域名白名单 |
+| `transform.service.ts` | step1/step2 流程编排 |
+| `seal-prompts.ts` | 生图提示词 |
+| `seal.constants.ts` | 朱砂/宣纸色 |
+| `image-math.ts` | 纸纹噪声、色偏判定 |
+| `color.processor.ts` | sharp 像素处理 |
+| `comfyui.generator.ts` | ComfyUI API 客户端 |
+| `mock.generator.ts` | 链路调试用 |
+| `storage.service.ts` | 本地磁盘图床 |
+
+前端：`pages/index` + `network.ts`（域名拼接、长超时）+ `components/ui` 组件库（按需引用）。
+
 ## 功能
 
 1. 选择草稿图  
