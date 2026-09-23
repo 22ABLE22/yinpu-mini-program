@@ -21,7 +21,7 @@ export class TransformController {
 
   /**
    * step2 会服务端拉取 imageUrl，仅允许本机/项目存储域名，避免 SSRF。
-   * 白名单：localhost、127.0.0.1，以及 PUBLIC_BASE_URL / COZE_BUCKET_ENDPOINT_URL 的主机名。
+   * 白名单：localhost、127.0.0.1，以及 PUBLIC_BASE_URL / EXTRA_ALLOWED_HOSTS 的主机名。
    */
   private isAllowedImageUrl(imageUrl: string): boolean {
     let parsed: URL;
@@ -39,7 +39,7 @@ export class TransformController {
 
     const endpoints = [
       process.env.PUBLIC_BASE_URL,
-      process.env.COZE_BUCKET_ENDPOINT_URL,
+      process.env.EXTRA_ALLOWED_HOSTS,
     ].filter(Boolean) as string[];
 
     for (const ep of endpoints) {

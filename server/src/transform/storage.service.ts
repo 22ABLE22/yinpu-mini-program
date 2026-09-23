@@ -5,7 +5,7 @@ import * as path from 'path';
 import { randomBytes } from 'crypto';
 
 /**
- * 本地磁盘存储（脱离扣子 S3）。
+ * 本地磁盘存储：写入 UPLOAD_DIR，并通过 /uploads 提供访问。
  * - 文件写到 UPLOAD_DIR（默认 server/uploads）
  * - 返回 PUBLIC_BASE_URL + /uploads/xxx
  * - main.ts 会把 /uploads 静态映射到该目录

@@ -3,6 +3,7 @@ import axios from 'axios';
 import { StorageService } from './storage.service';
 import { ColorProcessor } from './color.processor';
 import { IMAGE_GENERATOR, ImageGenerator } from './image-generator';
+import { buildStep1Prompt, buildStep2BaiwenPrompt } from './seal-prompts';
 
 /**
  * 印章转换服务
@@ -35,7 +36,7 @@ export class TransformService {
     const { url: draftUrl } = await this.storage.uploadImage(lineArt, 'draft_lineart.png');
     this.logger.log(`step1[${type}]: lineart uploaded, url=${draftUrl}`);
 
-    const prompt = this.buildStep1Prompt(type);
+    const prompt = buildStep1Prompt(type);
     // 风格转换要够强：denoise 偏高，结构交给 ControlNet
     const generated = await this.generator.generate({
       prompt,
@@ -77,7 +78,7 @@ export class TransformService {
     // 白文 step2：
     // step1 已是「红底白字」成品，这里只负责「放到宣纸上 + 去掉外层多余细红圈」，
     // 绝不能再跑 adjustToBaiwenSeal（会把红/白反相）。
-    const prompt = this.buildStep2BaiwenPrompt();
+    const prompt = buildStep2BaiwenPrompt();
     const generated = await this.generator.generate({
       prompt,
       imageUrl: step1Url,
@@ -106,54 +107,5 @@ export class TransformService {
     } catch (err: any) {
       throw new BadRequestException(`下载图片失败: ${err?.message || err}`);
     }
-  }
-
-  private buildStep1Prompt(type: 'baiwen' | 'zhuwen'): string {
-    const base = [
-      'flat vector style traditional Chinese carved seal',
-      'ONLY two colors: dark cinnabar red and off-white',
-      'square seal with thick border',
-      'seal script (zhuan shu) character strokes',
-      'solid color fill, no gradient, no paper texture, no grid lines',
-      'no shadow, no 3d, no photo, no watermark, no English text',
-      'centered composition, high contrast',
-    ];
-    if (type === 'zhuwen') {
-      base.push(
-        'yang carving zhuwen intaglio: white background, red characters and red border',
-      );
-    } else {
-      base.push(
-        'yin carving baiwen relief: solid red background, white character strokes carved out',
-      );
-    }
-    return base.join(', ');
-  }
-
-  /**
-   * 白文 step2 提示词
-   * 输入已是「红底白字」印章；输出应是「同一枚印 + 宣纸底」，且去掉外层多余细红圈。
-   * 不要让模型改成白底红字。
-   */
-  private buildStep2BaiwenPrompt(): string {
-    return [
-      'Keep this exact Chinese baiwen seal: solid dark cinnabar red background, white carved character strokes, white seal border.',
-      'Do NOT invert colors. Do NOT make white background with red characters.',
-      'Replace the surrounding area with traditional Chinese xuan rice paper: off-white handmade paper, subtle fiber grain.',
-      'Keep only ONE square seal border that tightly wraps the characters.',
-      'Remove any extra outer thin red ring, second outline, or decorative red frame outside the main seal.',
-      'Outside the seal square: only clean rice paper, no red ink, no second border, no shadow, no grid.',
-      'Flat illustration, centered seal, high quality.',
-    ].join(' ');
-  }
-
-  private buildStep2Prompt(): string {
-    return [
-      'traditional Chinese xuan rice paper, off-white handmade paper with subtle fiber',
-      'place this square seal stamp on the paper',
-      'keep seal colors: dark cinnabar red and white strokes',
-      'flat illustration, no grid lines, no photo, no extra objects',
-      'soft even lighting, clean background',
-    ].join(', ');
   }
 }

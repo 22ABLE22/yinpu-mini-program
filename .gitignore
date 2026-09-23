@@ -52,6 +52,11 @@ project.private.config.json
 node-compile-cache/
 .codegraph/
 
+# Local scratch / test images at repo root
+/test*.jpg
+/test*.png
+/out*.png
+
 # Local ComfyUI portable (do not commit models/binaries)
 ComfyUI_windows_portable/
 
